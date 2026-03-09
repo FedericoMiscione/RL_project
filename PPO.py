@@ -7,18 +7,33 @@ import os
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+N_ACTIONS = 3
+
 # set as global variables
 PATH = None
 FILENAME = None
- 
+
+class NoExistingRoleException(Exception):
+    def __init__(self, message="The role chosen for the network must be 'actor' either 'critic'", error_code=404):
+        super().__init__(message)
+        self.error_code = error_code
+
+    def __str__(self):
+        return f"Unexisting role Exception : {self.error_code}. \n {self.message}" 
+
 class simpleCNN(nn.modules):
-    def __init__(self, n_actions=7, path=PATH, filename=FILENAME, device=DEVICE):
+    def __init__(self, role, n_actions=N_ACTIONS, path=PATH, filename=FILENAME, device=DEVICE):
         
         self.stack_size = 4
         self.frame_stack = []
 
         self.filepath = os.join.path(path, filename)
 
+        if role == 'actor' or role =='critic':
+            self.role = role
+        else:
+            raise NoExistingRoleException()
+        
         self.n_actions = n_actions
 
         self.conv = nn.Sequential(
@@ -39,7 +54,6 @@ class simpleCNN(nn.modules):
             nn.Linear(conv_out, 512),
             nn.ReLU(),
             nn.Linear(512, self.n_actions),
-            #nn.Softmax(dim=-1)
         )
         
         self.mu_head = nn.Linear(512, self.action_dim)
@@ -57,7 +71,12 @@ class simpleCNN(nn.modules):
         h = self.fc(h)
         mu = self.mu_head(h)
         value = self.value_head(h).squeeze(-1)
-        return mu, self.log_std, value        
+        if self.role == "actor":
+            dist = torch.distributions.Categorical(torch.distributions.Normal(mu, self.log_std.exp()))
+            return dist
+        elif self.role == "critic":
+            return mu, self.log_std, value
+            
 
 
 def compute_loss(policy_loss, value_loss, value_coeff, entropy, entropy_coeff):
