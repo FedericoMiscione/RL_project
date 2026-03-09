@@ -39,12 +39,12 @@ class simpleCNN(nn.modules):
             nn.Linear(conv_out, 512),
             nn.ReLU(),
             nn.Linear(512, self.n_actions),
-            nn.Softmax(dim=-1)
+            #nn.Softmax(dim=-1)
         )
         
-        # self.mu_head = nn.Linear(512, self.action_dim)
-        # self.log_std = nn.Parameter(torch.zeros(self.action_dim))
-        # self.value_head = nn.Linear(512, 1)
+        self.mu_head = nn.Linear(512, self.action_dim)
+        self.log_std = nn.Parameter(torch.zeros(self.action_dim))
+        self.value_head = nn.Linear(512, 1)
         
     def save_checkpoint(self):
         torch.save(self.state_dict(), self.filepath)
@@ -55,11 +55,9 @@ class simpleCNN(nn.modules):
     def forward(self, x):
         h = self.conv(x)
         h = self.fc(h)
-        distribution = torch.distributions.Categorical(h)
-        return distribution
-        # mu = self.mu_head(h)
-        # value = self.value_head(h).squeeze(-1)
-        # return mu, self.log_std, value        
+        mu = self.mu_head(h)
+        value = self.value_head(h).squeeze(-1)
+        return mu, self.log_std, value        
 
 
 def compute_loss(policy_loss, value_loss, value_coeff, entropy, entropy_coeff):
