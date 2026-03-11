@@ -82,17 +82,15 @@ class simpleCNN(nn.modules):
 def compute_loss(policy_loss, value_loss, value_coeff, entropy, entropy_coeff):
     return policy_loss + value_coeff*value_loss + entropy_coeff*entropy
 
-def compute_GAE(rewards, values, dones, last_value):
-    # Fake initialization of hyperparameters
-    gamma_fake, lambda_fake = 1, 1
+def compute_GAE(rewards, values, dones, last_value, gamma_, lambda_):
         
     adv = np.zeros_like(rewards)
     gae = 0.0
     for t in reversed(range(len(rewards))):
         mask = 1.0 - dones[t]
         next_value = last_value if t == len(rewards) -1 else values[t+1]
-        delta = rewards[t] + gamma_fake*next_value*mask - values[t]
-        gae = delta + gamma_fake*lambda_fake*mask*gae
+        delta = rewards[t] + gamma_*next_value*mask - values[t]
+        gae = delta + gamma_*lambda_*mask*gae
         adv[t] = gae
     return adv, adv + values
 
