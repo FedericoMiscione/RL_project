@@ -110,8 +110,8 @@ class PPO(nn.Module):
         self.value_scalar = None
         self.last_state = None
         
-        self.actor = simpleCNN(device=self.device)
-        self.critic = simpleCNN(device=self.device)
+        self.actor = simpleCNN(role="actor", device=self.device)
+        self.critic = simpleCNN(role="critic", device=self.device)
         
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4)
         
@@ -146,4 +146,13 @@ class PPO(nn.Module):
         distribution = self.actor(state)
         value = self.critic(state)
         action = distribution.sample()
+        
+        # Study the dimensionality of these elements and if needed to take an item of action or it's already an action
+        self.log_prob = distribution.log_prob(action).item()
+        self.value_scalar = value.item()
+        action = action.item()
+        
+        return action
+        
+        
         
