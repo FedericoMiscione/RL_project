@@ -21,13 +21,13 @@ class NoExistingRoleException(Exception):
     def __str__(self):
         return f"Unexisting role Exception : {self.error_code}. \n {self.message}" 
 
-class simpleCNN(nn.modules):
+class simpleCNN(nn.Module):
     def __init__(self, role, n_actions=N_ACTIONS, path=PATH, filename=FILENAME, device=DEVICE):
         
         self.stack_size = 4
         self.frame_stack = []
 
-        self.filepath = os.join.path(path, filename)
+        self.filepath = os.path.join(path, filename)
 
         if role == 'actor' or role =='critic':
             self.role = role
@@ -37,7 +37,7 @@ class simpleCNN(nn.modules):
         self.n_actions = n_actions
 
         self.conv = nn.Sequential(
-            nn.Conv2d(3 * self.stack_size, 32, 8, stride=4),
+            nn.Conv2d(3 * self.stack_size, 32, 8, stride=4), # It's for 96x96 images but we have Minigrid 7x7
             nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2),
             nn.ReLU(),
@@ -56,8 +56,8 @@ class simpleCNN(nn.modules):
             nn.Linear(512, self.n_actions),
         )
         
-        self.mu_head = nn.Linear(512, self.action_dim)
-        self.log_std = nn.Parameter(torch.zeros(self.action_dim))
+        self.mu_head = nn.Linear(512, self.n_actions)
+        self.log_std = nn.Parameter(torch.zeros(self.n_actions))
         self.value_head = nn.Linear(512, 1)
         
     def save_checkpoint(self):
@@ -71,19 +71,19 @@ class simpleCNN(nn.modules):
         h = self.fc(h)
         mu = self.mu_head(h)
         value = self.value_head(h).squeeze(-1)
+        
+        # As expected, the distribution is wrongly defined, since should be returned logits from a
+        # Categorical distribution with vector of dimension n_actions        
         if self.role == "actor":
             dist = torch.distributions.Categorical(torch.distributions.Normal(mu, self.log_std.exp()))
             return dist
         elif self.role == "critic":
             return mu, self.log_std, value
             
-
-
 def compute_loss(policy_loss, value_loss, value_coeff, entropy, entropy_coeff):
     return policy_loss + value_coeff*value_loss + entropy_coeff*entropy
 
 def compute_GAE(rewards, values, dones, last_value, gamma_, lambda_):
-        
     adv = np.zeros_like(rewards)
     gae = 0.0
     for t in reversed(range(len(rewards))):
@@ -96,7 +96,6 @@ def compute_GAE(rewards, values, dones, last_value, gamma_, lambda_):
 
 
 class PPO(nn.Module):
-
     def __init__(self, stack_size, device=DEVICE):
         super().__init__()
         self.device = device
@@ -184,19 +183,82 @@ class PPO(nn.Module):
                 obs, _ = env.reset()
                 self._reset_stack(obs)
                 
-        return obs
+        return obs, states_vec, actions_vec, old_logprob_vec, rewards_vec, values_vec, dones_vec, episodes_rewards
+        
         
     def learn(self, n_updates, n_steps, gamma_, lambda_, clip_epsilon, minibatch, value_coeff, entropy_coeff):
         env = gym.make("MiniGrid-LavaGapS7-v0", render_mode="human")
         
         for update in range(n_updates):
-            obs = self.update(n_steps, env)
+            obs, states, actions, old_logprob, rewards, values, dones, episodes_rewards = self.update(n_steps, env)
             
             with torch.no_grad():
-                # See better if actor or critic and the item 
+                # Probably it will be taken from critic, since the returned value of the actor
+                # has different structure
                 last_value = self.actor(self._get_stacked_obs(obs))[2].item()
+            
+            advantages, returns = compute_GAE(np.array(rewards), np.array(values), np.array(dones, dtype=np.float32), last_value, gamma_, lambda_)
+            
+            states_tensor = torch.tensor(np.array(states), dtype=torch.float32, device=self.device)
+            advantages = (advantages - advantages.mean())/ (advantages.std() + 1e-8)
+            states_tensor = torch.stack([torch.tensor(state, device=self.device, dtype=torch.float32) for state in np.array(states)])
+            action_tensor = torch.tensor(np.array(actions), dtype=torch.float32, device=self.device)
+            old_logprob_tensor = torch.tensor(old_logprob, dtype=torch.float32, device=self.device)
+            advantages_tensor = torch.tensor(advantages, dtype=torch.float32, device=self.device)
+            returns_tensor = torch.tensor(returns, dtype=torch.float32, device=self.device)
+            
+            indices = np.arange(len(np.array(states)))
+            surrogate_values = []
+            
+            # Here there was a loop for ppo_epochs
+            np.random.shuffle(indices)
+            for start in range(0, len(np.array(states)), minibatch):
+                batch = indices[start:start + minibatch]
+                s = states_tensor[batch]
+                a = action_tensor[batch]
+                old_lp = old_logprob_tensor[batch]
+                A = advantages_tensor[batch]
+                R = returns_tensor[batch]
+                
+                distribution = self.actor(s)
+                # As expected, it should be computed from the collected data in actions_vec
+                # probably should be : logp = distribution.log_prob(a)
+                logp = distribution.log_prob(distribution.sample())
+                
+                mu, log_std, v_pred = self.critic(s)
+                std = log_std.exp()
+                
+                ratio = torch.exp(logp - old_lp)
+                
+                surrogate1 = ratio * A
+                surrogate2 = torch.clamp(ratio, 1 - clip_epsilon, 1 + clip_epsilon) * A
+                policy_loss = - torch.min(surrogate1, surrogate2).mean()
+                
+                value_loss = F.mse_loss(v_pred, R)
+                entropy = distribution.entropy().sum(-1).mean()
+                
+                loss = compute_loss(policy_loss=policy_loss,
+                                    value_loss=value_loss, value_coeff=value_coeff,
+                                    entropy=entropy, entropy_coeff=entropy_coeff
+                                    )
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                self.optimizer.step()
+                
+                surrogate_values.append(policy_loss.item())
+                
+            mean_reward = np.mean(episodes_rewards) if episodes_rewards else 0.0
+            print(f"[PPO] Update {update+1}/{n_updates} completed | Mean episode reward: {mean_reward:.2f}")
+            
+        print("Training completed.")
         
-            # Let's continue from here
-        return
+    # Probably removable
+    def save(self):
+        self.actor.save_checkpoint()
+        self.critic.save_checkpoint()
         
-        
+    def load(self):
+        self.actor.load_checkpoint()
+        self.critic.load_checkpoint()
