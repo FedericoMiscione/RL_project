@@ -152,5 +152,51 @@ class PPO(nn.Module):
         
         return action
         
+    def update(self, n_steps, env):
+        obs, _ = env.reset
+        self._reset_stack(obs)
+        
+        states_vec, actions_vec, old_logprob_vec, values_vec, rewards_vec, dones_vec = [], [], [], [], [], []
+        episodes_rewards = []
+        
+        episode_reward = 0.0
+        
+        for _ in range(n_steps):
+            
+            action = self.act(obs)
+            
+            states_vec.append(self.last_state.squeeze(0).cpu().numpy())    # squeeze (?)
+            actions_vec.append(action)
+            old_logprob_vec.append(self.log_prob)
+            values_vec.append(self.value_scalar)
+            
+            obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            
+            rewards_vec.append(reward) # is this useful (???) 
+            dones_vec.append(done)
+            
+            episode_reward += reward
+            
+            if done:
+                episodes_rewards.append()
+                episode_reward = 0.0
+                obs, _ = env.reset()
+                self._reset_stack(obs)
+                
+        return obs
+        
+    def learn(self, n_updates, n_steps, gamma_, lambda_, clip_epsilon, minibatch, value_coeff, entropy_coeff):
+        env = gym.make("MiniGrid-LavaGapS7-v0", render_mode="human")
+        
+        for update in range(n_updates):
+            obs = self.update(n_steps, env)
+            
+            with torch.no_grad():
+                # See better if actor or critic and the item 
+                last_value = self.actor(self._get_stacked_obs(obs))[2].item()
+        
+            # Let's continue from here
+        return
         
         
