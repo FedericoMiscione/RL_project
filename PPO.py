@@ -21,6 +21,16 @@ class NoExistingRoleException(Exception):
     def __str__(self):
         return f"Unexisting role Exception : {self.error_code}. \n {self.message}" 
 
+'''
+The input sequence should be a 7x7x3 representation of the grid in which each coordinate (x, y)
+of the grid contains a vector [v_1, v_2, v_3] in which:
+- Channel 0 -> represents the type of the object (Empty, Wall, Lava, Goal)
+- Channel 1 -> represents the color of the object as an integer
+- Channel 2 -> represents the state of the object
+
+Interesting point: Channels' values are categories, then could be interesting to use a embedding
+layer before the CNN in order to transform these indices in dense vectors.
+'''
 class simpleCNN(nn.Module):
     def __init__(self, role, n_actions=N_ACTIONS, path=PATH, filename=FILENAME, device=DEVICE):
         
@@ -36,6 +46,8 @@ class simpleCNN(nn.Module):
         
         self.n_actions = n_actions
 
+        # Using the RGBImgPartialObsWrapper provided by Gymnasium the input will appear as an image of size 56x56
+        # otherwise let's continue with a 7x7 image
         self.conv = nn.Sequential(
             nn.Conv2d(3 * self.stack_size, 32, 8, stride=4), # It's for 96x96 images but we have Minigrid 7x7
             nn.ReLU(),
