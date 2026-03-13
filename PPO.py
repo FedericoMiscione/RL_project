@@ -47,11 +47,13 @@ class simpleCNN(nn.Module):
         self.n_actions = n_actions
 
         # Using the RGBImgPartialObsWrapper provided by Gymnasium the input will appear as an image of size 56x56
-        # otherwise let's continue with a 7x7 image
-        # Better for 7x7 (Symbolic)
+        # otherwise let's continue with a 7x7 image, but could be useful to work on embeddings
         self.conv = nn.Sequential(
-            nn.Conv2d(3 * self.stack_size, 32, 3, padding=1), # Stay 7x7
+            nn.Conv2d(3 * self.stack_size, 32, kernel_size=3, padding=1), # Kept dimensionality 7x7
             nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),                  # Kept dimensionality 7x7
+            nn.ReLU(),
+            nn.Flatten()
             nn.Conv2d(32, 64, 3, padding=1),                 # Stay 7x7
             nn.ReLU(),
             nn.Flatten() # conv_out will be 64 * 7 * 7 = 3136
