@@ -4,14 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import os
+from minigrid.wrappers import FullyObsWrapper
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ACTIONS = 3
 
 # set as global variables
-PATH = None
-FILENAME = None
+PATH = r"C:\Users\fede6\Desktop\AI_R\RL_project"
 
 class NoExistingRoleException(Exception):
     def __init__(self, message="The role chosen for the network must be 'actor' either 'critic'", error_code=404):
@@ -32,18 +32,24 @@ Interesting point: Channels' values are categories, then could be interesting to
 layer before the CNN in order to transform these indices in dense vectors.
 '''
 class simpleCNN(nn.Module):
-    def __init__(self, role, n_actions=N_ACTIONS, path=PATH, filename=FILENAME, device=DEVICE):
-        
+    def __init__(self, role, n_actions=N_ACTIONS, path=PATH, device=DEVICE):
+        super().__init__()
         self.stack_size = 4
         self.frame_stack = []
-
-        self.filepath = os.path.join(path, filename)
 
         if role == 'actor' or role =='critic':
             self.role = role
         else:
             raise NoExistingRoleException()
         
+        if self.role == 'actor':
+            self.filename = "actor.pth"
+        elif self.role == 'critic':
+            self.filename = 'critic.pth'
+        else:
+            raise NoExistingRoleException()
+        
+        self.filepath = os.path.join(path, self.filename)
         self.n_actions = n_actions
 
         # Using the RGBImgPartialObsWrapper provided by Gymnasium the input will appear as an image of size 56x56
@@ -99,7 +105,7 @@ def compute_GAE(rewards, values, dones, last_value, gamma_, lambda_):
 
 
 class PPO(nn.Module):
-    def __init__(self, stack_size, device=DEVICE):
+    def __init__(self, stack_size=4, device=DEVICE):
         super().__init__()
         self.device = device
 
@@ -121,7 +127,7 @@ class PPO(nn.Module):
         obs_to_array = np.asarray(obs, dtype=np.float32).transpose(2, 0, 1)
         tensor = torch.tensor(obs_to_array, device=self.device)
         if tensor.max() > 1.0:
-            tensor = tensor / 255.0
+            tensor = tensor / 10.0
         return tensor
     
     def _reset_stack(self, obs):
@@ -143,8 +149,8 @@ class PPO(nn.Module):
         x = self._get_stacked_obs(state)
         self.last_state = x
         
-        distribution = self.actor(state)
-        value = self.critic(state)
+        distribution = self.actor(x)
+        value = self.critic(x)
         action = distribution.sample()
         
         # Study the dimensionality of these elements and if needed to take an item of action or it's already an action
@@ -155,8 +161,8 @@ class PPO(nn.Module):
         return action
         
     def update(self, n_steps, env):
-        obs, _ = env.reset
-        self._reset_stack(obs)
+        obs, _ = env.reset()
+        self._reset_stack(obs['image'])
         
         states_vec, actions_vec, old_logprob_vec, values_vec, rewards_vec, dones_vec = [], [], [], [], [], []
         episodes_rewards = []
@@ -165,7 +171,7 @@ class PPO(nn.Module):
         
         for _ in range(n_steps):
             
-            action = self.act(obs)
+            action = self.act(obs['image'])
             
             states_vec.append(self.last_state.squeeze(0).cpu().numpy())
             actions_vec.append(action)
@@ -181,22 +187,24 @@ class PPO(nn.Module):
             episode_reward += reward
             
             if done:
-                episodes_rewards.append()
+                episodes_rewards.append(episode_reward)
                 episode_reward = 0.0
                 obs, _ = env.reset()
-                self._reset_stack(obs)
+                self._reset_stack(obs['image'])
                 
         return obs, states_vec, actions_vec, old_logprob_vec, rewards_vec, values_vec, dones_vec, episodes_rewards
-        
-        
+                
     def learn(self, n_updates, n_steps, gamma_, lambda_, clip_epsilon, minibatch, value_coeff, entropy_coeff):
-        env = gym.make("MiniGrid-LavaGapS7-v0", render_mode="human")
+        self.actor.train()
+        self.critic.train()
+        
+        env = FullyObsWrapper(gym.make("MiniGrid-LavaGapS7-v0"))
         
         for update in range(n_updates):
             obs, states, actions, old_logprob, rewards, values, dones, episodes_rewards = self.update(n_steps, env)
             
             with torch.no_grad():
-                last_value = self.critic(self._get_stacked_obs(obs)).item()
+                last_value = self.critic(self._get_stacked_obs(obs['image'])).item()
             
             advantages, returns = compute_GAE(np.array(rewards), np.array(values), np.array(dones, dtype=np.float32), last_value, gamma_, lambda_)
             
@@ -211,7 +219,7 @@ class PPO(nn.Module):
             indices = np.arange(len(np.array(states)))
             surrogate_values = []
             
-            # Here there was a loop for ppo_epochs
+            # for _ in range(10): # ppo_epochs
             np.random.shuffle(indices)
             for start in range(0, len(np.array(states)), minibatch):
                 batch = indices[start:start + minibatch]
@@ -233,12 +241,19 @@ class PPO(nn.Module):
                 policy_loss = - torch.min(surrogate1, surrogate2).mean()
                 
                 value_loss = F.mse_loss(v_pred, R)
-                entropy = distribution.entropy().sum(-1).mean()
+                entropy = distribution.entropy().mean()
                 
                 loss = compute_loss(policy_loss=policy_loss,
                                     value_loss=value_loss, value_coeff=value_coeff,
                                     entropy=entropy, entropy_coeff=entropy_coeff
                                     )
+                
+                # with torch.no_grad():
+                #     approx_kl = (old_lp - logp).mean().item() # Quantifica quanto cambia la policy
+                #     ent = distribution.entropy().mean().item()
+                #     
+                # if start == 0: # Stampa solo per il primo minibatch per non intasare il terminale
+                #     print(f"DEBUG: Entropy: {ent:.4f} | KL: {approx_kl:.4f} | Value Loss: {value_loss.item():.4f}")
                 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -248,9 +263,9 @@ class PPO(nn.Module):
                 surrogate_values.append(policy_loss.item())
                 
             mean_reward = np.mean(episodes_rewards) if episodes_rewards else 0.0
-            print(f"[PPO] Update {update+1}/{n_updates} completed | Mean episode reward: {mean_reward:.2f}")
+            print(f"[PPO] Update {update+1}/{n_updates} completed | Mean episode reward: {mean_reward:.4f}")
             
-        print("Training completed.")
+        print("Training completed.")    
         
     # Probably removable
     def save(self):
