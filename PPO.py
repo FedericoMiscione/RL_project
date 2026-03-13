@@ -49,28 +49,26 @@ class simpleCNN(nn.Module):
         # Using the RGBImgPartialObsWrapper provided by Gymnasium the input will appear as an image of size 56x56
         # otherwise let's continue with a 7x7 image
         self.conv = nn.Sequential(
-            nn.Conv2d(3 * self.stack_size, 32, 8, stride=4), # It's for 96x96 images but we have Minigrid 7x7
+            nn.Conv2d(3 * self.stack_size, 16, 3, stride=1), # It's for 96x96 images but we have Minigrid 7x7
             nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
+            nn.Conv2d(16, 32, 1, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
+            nn.Conv2d(32, 32, 3, stride=1),
             nn.ReLU(),
             nn.Flatten()
         )
 
         with torch.no_grad():
-            dummy = torch.zeros(1, 3 * self.stack_size, 96, 96)
+            dummy = torch.zeros(1, 3 * self.stack_size, 7, 7)
             conv_out = self.conv(dummy).shape[1]
 
         self.fc = nn.Sequential(
-            nn.Linear(conv_out, 512),
-            nn.ReLU(),
-            nn.Linear(512, self.n_actions),
+            nn.Linear(conv_out, 256),
+            nn.ReLU()
         )
         
-        self.mu_head = nn.Linear(512, self.n_actions)
-        self.log_std = nn.Parameter(torch.zeros(self.n_actions))
-        self.value_head = nn.Linear(512, 1)
+        self.policy_head = nn.Linear(256, self.n_actions)
+        self.value_head = nn.Linear(256, 1)
         
     def save_checkpoint(self):
         torch.save(self.state_dict(), self.filepath)
@@ -81,16 +79,11 @@ class simpleCNN(nn.Module):
     def forward(self, x):
         h = self.conv(x)
         h = self.fc(h)
-        mu = self.mu_head(h)
-        value = self.value_head(h).squeeze(-1)
-        
-        # As expected, the distribution is wrongly defined, since should be returned logits from a
-        # Categorical distribution with vector of dimension n_actions        
+                
         if self.role == "actor":
-            dist = torch.distributions.Categorical(torch.distributions.Normal(mu, self.log_std.exp()))
-            return dist
+            return torch.distributions.Categorical(logits=self.policy_head(h))
         elif self.role == "critic":
-            return mu, self.log_std, value
+            return self.value_head(h).squeeze(-1)
             
 def compute_loss(policy_loss, value_loss, value_coeff, entropy, entropy_coeff):
     return policy_loss + value_coeff*value_loss + entropy_coeff*entropy
@@ -176,7 +169,7 @@ class PPO(nn.Module):
             
             action = self.act(obs)
             
-            states_vec.append(self.last_state.squeeze(0).cpu().numpy())    # squeeze (?)
+            states_vec.append(self.last_state.squeeze(0).cpu().numpy())
             actions_vec.append(action)
             old_logprob_vec.append(self.log_prob)
             values_vec.append(self.value_scalar)
@@ -184,7 +177,7 @@ class PPO(nn.Module):
             obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
-            rewards_vec.append(reward) # is this useful (???) 
+            rewards_vec.append(reward)
             dones_vec.append(done)
             
             episode_reward += reward
@@ -205,9 +198,7 @@ class PPO(nn.Module):
             obs, states, actions, old_logprob, rewards, values, dones, episodes_rewards = self.update(n_steps, env)
             
             with torch.no_grad():
-                # Probably it will be taken from critic, since the returned value of the actor
-                # has different structure
-                last_value = self.actor(self._get_stacked_obs(obs))[2].item()
+                last_value = self.critic(self._get_stacked_obs(obs)).item()
             
             advantages, returns = compute_GAE(np.array(rewards), np.array(values), np.array(dones, dtype=np.float32), last_value, gamma_, lambda_)
             
@@ -233,12 +224,9 @@ class PPO(nn.Module):
                 R = returns_tensor[batch]
                 
                 distribution = self.actor(s)
-                # As expected, it should be computed from the collected data in actions_vec
-                # probably should be : logp = distribution.log_prob(a)
-                logp = distribution.log_prob(distribution.sample())
+                logp = distribution.log_prob(a)
                 
-                mu, log_std, v_pred = self.critic(s)
-                std = log_std.exp()
+                v_pred = self.critic(s)
                 
                 ratio = torch.exp(logp - old_lp)
                 
