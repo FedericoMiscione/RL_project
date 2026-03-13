@@ -48,14 +48,13 @@ class simpleCNN(nn.Module):
 
         # Using the RGBImgPartialObsWrapper provided by Gymnasium the input will appear as an image of size 56x56
         # otherwise let's continue with a 7x7 image
+        # Better for 7x7 (Symbolic)
         self.conv = nn.Sequential(
-            nn.Conv2d(3 * self.stack_size, 16, 3, stride=1), # It's for 96x96 images but we have Minigrid 7x7
+            nn.Conv2d(3 * self.stack_size, 32, 3, padding=1), # Stay 7x7
             nn.ReLU(),
-            nn.Conv2d(16, 32, 1, stride=2),
+            nn.Conv2d(32, 64, 3, padding=1),                 # Stay 7x7
             nn.ReLU(),
-            nn.Conv2d(32, 32, 3, stride=1),
-            nn.ReLU(),
-            nn.Flatten()
+            nn.Flatten() # conv_out will be 64 * 7 * 7 = 3136
         )
 
         with torch.no_grad():
@@ -63,12 +62,12 @@ class simpleCNN(nn.Module):
             conv_out = self.conv(dummy).shape[1]
 
         self.fc = nn.Sequential(
-            nn.Linear(conv_out, 256),
+            nn.Linear(conv_out, 512),
             nn.ReLU()
         )
         
-        self.policy_head = nn.Linear(256, self.n_actions)
-        self.value_head = nn.Linear(256, 1)
+        self.policy_head = nn.Linear(512, self.n_actions)
+        self.value_head = nn.Linear(512, 1)
         
     def save_checkpoint(self):
         torch.save(self.state_dict(), self.filepath)
