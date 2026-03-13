@@ -53,9 +53,6 @@ class simpleCNN(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, padding=1),                  # Kept dimensionality 7x7
             nn.ReLU(),
-            nn.Flatten()
-            nn.Conv2d(32, 64, 3, padding=1),                 # Stay 7x7
-            nn.ReLU(),
             nn.Flatten() # conv_out will be 64 * 7 * 7 = 3136
         )
 
