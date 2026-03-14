@@ -269,9 +269,11 @@ class PPO(nn.Module):
         
     # Probably removable
     def save(self):
-        self.actor.save_checkpoint()
-        self.critic.save_checkpoint()
+        # self.actor.save_checkpoint()
+        # self.critic.save_checkpoint()
+        torch.save(self.state_dict(), os.path.join(os.getcwd(), "ppo.pt"))
         
     def load(self):
-        self.actor.load_checkpoint()
-        self.critic.load_checkpoint()
+        # self.actor.load_checkpoint()
+        # self.critic.load_checkpoint()
+        self.load_state_dict(torch.load(os.path.join(os.getcwd(), "ppo.pt"), map_location=self.device))
