@@ -103,9 +103,8 @@ def compute_GAE(rewards, values, dones, last_value, gamma_, lambda_):
         adv[t] = gae
     return adv, adv + values
 
-
 class PPO(nn.Module):
-    def __init__(self, stack_size=4, device=DEVICE):
+    def __init__(self, stack_size=4, lr=3e-4, adam_epsilon=1e-8, device=DEVICE):
         super().__init__()
         self.device = device
 
@@ -119,7 +118,7 @@ class PPO(nn.Module):
         self.actor = simpleCNN(role="actor", device=self.device)
         self.critic = simpleCNN(role="critic", device=self.device)
         
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, eps=adam_epsilon)
         
         self.to(self.device)
         
@@ -219,51 +218,52 @@ class PPO(nn.Module):
             indices = np.arange(len(np.array(states)))
             surrogate_values = []
             
-            # for _ in range(10): # ppo_epochs
-            np.random.shuffle(indices)
-            for start in range(0, len(np.array(states)), minibatch):
-                batch = indices[start:start + minibatch]
-                s = states_tensor[batch]
-                a = action_tensor[batch]
-                old_lp = old_logprob_tensor[batch]
-                A = advantages_tensor[batch]
-                R = returns_tensor[batch]
-                
-                distribution = self.actor(s)
-                logp = distribution.log_prob(a)
-                
-                v_pred = self.critic(s)
-                
-                ratio = torch.exp(logp - old_lp)
-                
-                surrogate1 = ratio * A
-                surrogate2 = torch.clamp(ratio, 1 - clip_epsilon, 1 + clip_epsilon) * A
-                policy_loss = - torch.min(surrogate1, surrogate2).mean()
-                
-                value_loss = F.mse_loss(v_pred, R)
-                entropy = distribution.entropy().mean()
-                
-                loss = compute_loss(policy_loss=policy_loss,
-                                    value_loss=value_loss, value_coeff=value_coeff,
-                                    entropy=entropy, entropy_coeff=entropy_coeff
-                                    )
-                
-                # with torch.no_grad():
-                #     approx_kl = (old_lp - logp).mean().item() # Quantifica quanto cambia la policy
-                #     ent = distribution.entropy().mean().item()
-                #     
-                # if start == 0: # Stampa solo per il primo minibatch per non intasare il terminale
-                #     print(f"DEBUG: Entropy: {ent:.4f} | KL: {approx_kl:.4f} | Value Loss: {value_loss.item():.4f}")
-                
-                self.optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-                self.optimizer.step()
-                
-                surrogate_values.append(policy_loss.item())
-                
+            for _ in range(4): # ppo_epochs
+                np.random.shuffle(indices)
+                for start in range(0, len(np.array(states)), minibatch):
+                    batch = indices[start:start + minibatch]
+                    s = states_tensor[batch]
+                    a = action_tensor[batch]
+                    old_lp = old_logprob_tensor[batch]
+                    A = advantages_tensor[batch]
+                    R = returns_tensor[batch]
+                    
+                    distribution = self.actor(s)
+                    logp = distribution.log_prob(a)
+                    
+                    v_pred = self.critic(s)
+                    
+                    ratio = torch.exp(logp - old_lp)
+                    
+                    surrogate1 = ratio * A
+                    surrogate2 = torch.clamp(ratio, 1 - clip_epsilon, 1 + clip_epsilon) * A
+                    policy_loss = - torch.min(surrogate1, surrogate2).mean()
+                    
+                    value_loss = F.mse_loss(v_pred, R)
+                    entropy = distribution.entropy().mean()
+                    
+                    loss = compute_loss(policy_loss=policy_loss,
+                                        value_loss=value_loss, value_coeff=value_coeff,
+                                        entropy=entropy, entropy_coeff=entropy_coeff
+                                        )
+                    
+                    # with torch.no_grad():
+                    #     approx_kl = (old_lp - logp).mean().item() # Quantifica quanto cambia la policy
+                    #     ent = distribution.entropy().mean().item()
+                    #     
+                    # if start == 0: # Stampa solo per il primo minibatch per non intasare il terminale
+                    #     print(f"DEBUG: Entropy: {ent:.4f} | KL: {approx_kl:.4f} | Value Loss: {value_loss.item():.4f}")
+                    
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    self.optimizer.step()
+                    
+                    surrogate_values.append(policy_loss.item())
+                            
+            # if update+1 % 1 == 0:
             mean_reward = np.mean(episodes_rewards) if episodes_rewards else 0.0
-            print(f"[PPO] Update {update+1}/{n_updates} completed | Mean episode reward: {mean_reward:.4f}")
+            print(f"[PPO] Update {update+1}/{n_updates} completed \t| Mean episode reward : {mean_reward:.4f}")
             
         print("Training completed.")    
         
